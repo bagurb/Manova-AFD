@@ -1,0 +1,221 @@
+
+FONCTION GENERALE ENCAPSULE
+
+```{r cars}
+rm(list = ls())
+library(formattable) # formatage des résultats sous forme de tableau widget
+library(ggplot2)
+library(MASS)
+df  <- read.table('8552.txt', header = T)
+df$Quality <- factor(df$Quality)
+
+library(readxl)
+prematures <- read_excel("prematures.xlsx")
+prematures$PREMATURE <- factor(prematures$PREMATURE)
+
+AFD_class <- function(df){
+  #-> .. on cherche la variable NON numérique ..
+  id_string  <- which(!sapply(df, is.numeric))
+  
+  #-> pour faciliter et uniformiser les recherches des classes, on renomme cette variable
+  names(df)[id_string] <- 'fac' 
+  
+  #-> détection automatique des variables numériques
+  id_num <- which(sapply(df, is.numeric))
+  X <- df[,id_num]
+  
+  #LIST FOR General
+  k <- nlevels(df$fac)
+  mG <- colMeans(X)
+  N <- nrow(df)
+  
+  df_List <- list()
+  W <- 0
+  B <- 0
+  for(i in 1:nlevels(df$fac))
+  {
+    levels(df$fac)[i] <- i
+    df_List[[i]] <- list(data=subset(X,df$fac==i), N = nrow(subset(X,df$fac==i)),mean = colMeans(subset(X,df$fac==i)),var = var(subset(X,df$fac==i))*((nrow(subset(X,df$fac==i))-1)/nrow(subset(X,df$fac==i))))
+    W <- W + (df_List[[i]]$N * (df_List[[i]]$var))
+    B <- B + ((df_List[[i]]$N)*(unlist(df_List[[i]]$mean)-mG))%*%t(unlist(df_List[[i]]$mean)-mG)
+  }
+  
+  print("data,N,mean,var par classe: ")
+  print(df_List)
+  
+  W <- (1/N)*W 
+  B <- (1/N)*B
+  
+  print("Inertie Intra(W): ")
+  print(W)
+  print("Inertie Inter(B): ")
+  print(B)
+  
+  Tot <- W + B
+  
+  print("Inertie Totale(Tot): ")
+  print(Tot)
+  
+  
+  #DIAGONALISATION#
+  B2 <- B * (N/(k-1))
+  W2 <- W * (N/(N-k))
+  rapportBW <- as.matrix(B2%*%solve(W2))
+  
+  #VALEUR PROPRE#
+  u <- eigen(rapportBW)
+  uReal <- Re(u$vectors)
+  
+  reduxUvectors <- uReal[,1:2]
+  reduxUvalues <- Re(u$values[1:2])
+  
+  print("Valeur propre: ")
+  print(reduxUvalues)
+  
+  
+  normeVal <- sqrt(diag(t(reduxUvectors)%*%W%*%reduxUvectors))
+  normeVec <- reduxUvectors/normeVal
+  
+  VecP <- sweep(reduxUvectors,2,normeVal,'/') 
+  
+  #INFERENCE STATISTIQUE#
+  
+  p <- ncol(df) - 1
+  liberty <- (p - seq(0,(ncol(VecP)-1),1)) * (k-1-seq(0,(ncol(VecP)-1),1))
+  inf_List <- list()
+  for (y in 1:(k-1))
+  {
+    Iw = reduxUvalues[y]/sum(reduxUvalues)
+    
+    Ncorr = sqrt(reduxUvalues[y]/(1 + reduxUvalues[y]))
+    
+    A = prod(1 - Ncorr**2)
+    
+    E = -(N-((p+k)/2)-1)*log(A)
+    
+    p_value <- 1-pchisq(E,liberty)
+    
+    inf_List[[y]] <- list(Iw=Iw,Ncorr = Ncorr,A = A,E = E,p_value = p_value[1])
+    
+  }
+  
+  print("Inférence statistique: ") 
+  print(inf_List)
+  C <- ncol(X)
+  df_matrix <- unname(as.matrix(sapply(X,as.numeric)))
+  mg_matrix <- matrix(unlist(mG), nrow=N, ncol = C, byrow = TRUE)
+  
+  Z <- as.matrix(df_matrix - mg_matrix)
+  Z
+  
+  pre_score = Z%*%VecP
+  score = cbind(pre_score,df[ncol(df)])
+  score
+  name_list <- list()
+  name_list[1] <- "Axe_1"
+  for (i in 2:ncol(score))
+  {
+    if (i != ncol(score))
+    {
+      name_list[i] <- paste(c("Axe",i),collapse = "_")
+    }else
+    {
+      name_list[i] <- "fac"
+    }
+  }
+  print("Score: ")
+  print(score)
+  
+  names(score) <- unlist(name_list)
+  names(score)[ncol(score)] <- 'class' <- 'class'
+  score
+  gr_ind_1 <- ggplot() +  geom_point(data = as.data.frame(score)  ,aes( x = Axe_1, y = Axe_2, colour = class, shape = class))                                # trace les points
+  gr_ind_1 <- gr_ind_1   +  geom_hline(yintercept = 0 , size = 0.1, colour = '#CCCCCC') + geom_vline(xintercept  = 0, size = 0.1,colour = '#CCCCCC') # trace les lignes
+  gr_ind_1 <- gr_ind_1   +  xlim(c(-5,4)) + ylim(c(-3,3))  # uniformitÃ©s des Ã©chelles
+  print(gr_ind_1)
+  
+  axes <- NULL
+  for( i in 1: (ncol(score)-1))
+  {
+    axes <- cbind(axes,as.numeric(score[,i]))
+  }
+  
+  G <- cbind(pre_score,df[ncol(score)])
+  G_fac <- aggregate(axes,list(df$fac),mean)
+  
+  for(i in 2:ncol(G_fac))
+  {
+    names(G_fac)[i] <- paste(c("Axe",i-1),collapse = "_")
+  }
+  
+  print("Centre de gravité: ")
+  print(G_fac)
+  
+  
+  gr_ind_2 <- ggplot() +  geom_point(data = G_fac  ,aes( x = Axe_1, y = Axe_2, colour = Group.1, shape =  Group.1), size = 3)  +  # trace les centres de gravitÃ©
+    geom_hline(yintercept = 0 , size = 0.1, colour = '#CCCCCC') + geom_vline(xintercept  = 0, size = 0.1,colour = '#CCCCCC') + # trace les lignes
+    xlim(c(-5,4)) + ylim(c(-3,3)) 
+  print(gr_ind_2)
+  
+  G <- as.matrix(subset(G_fac,select=-Group.1))
+  G
+  
+  distance <- NULL
+
+  for (i in 1:nrow(G))
+  { delta <- score[1:ncol(score)-1] - matrix(G[i,],ncol = ncol(G), nrow = N, byrow = T)
+  distance <- cbind(distance,apply(delta,1,function(x){return(sqrt(sum(x*x)))}))
+  }
+  
+  df_distance <- as.data.frame(distance) ; names(df_distance) <- G_fac[,1]
+  df_distance
+  print("Distance individus/centre de gravité: ")
+  print(df_distance)
+  
+  Quality_pred <- factor(apply(df_distance,1,function(x){return(names(x)[which.min(x)])})) 
+  Quality <- head(df$fac, "ind")
+  
+  Qtab <- as.data.frame(cbind(Quality= as.character(Quality),Quality_pred = as.character(Quality_pred)))
+  
+  Reference <- table(Quality_pred,Quality)
+  library(caret)
+  confusion <- confusionMatrix(Reference)
+  print("Matrice de confusion: ") 
+  print(confusion)
+  
+  prior <- list()
+  #LDA#
+  for (i in 1:(length(df_List)))
+  {
+    prior[i] <- as.vector(df_List[[i]]$N/N)
+  }
+  model <- lda(Quality~., df[,-ncol(df)],prior = unlist(prior), CV = FALSE)
+  pred <- predict(model)
+  predclass <- pred$class
+  pred$posterior
+  
+  lda_Reference <- table(predclass,Quality)
+  lda_confusion <- confusionMatrix(lda_Reference)
+  print("Matrice de confusion LDA: ")
+  print(lda_confusion)
+  
+  G <- cbind(pre_score,df[ncol(df)])
+  
+  as.data.frame(G)
+  Scores <- cbind(score, good_class = ifelse(Qtab$Quality_pred ==  Qtab$Quality, 'good','bad') )
+  
+  gr_ind_3 <- ggplot() + geom_point(data = Scores, aes(x = Axe_1, y = Axe_2, colour = class), size = 2)    +
+    geom_text (data = Scores, aes(x = Axe_1, y = Axe_2, label = good_class, colour = good_class), hjust = 1, vjust = 0 ) +
+    geom_point(data = G_fac,  aes(x = Axe_1, y = Axe_2, colour = Group.1, shape =  Group.1), size = 3)  +  # trace les centres de gravitÃ©
+    geom_hline(yintercept = 0 , size = 0.1, colour = '#CCCCCC') + geom_vline(xintercept  = 0, size = 0.1,colour = '#CCCCCC') 
+  print(gr_ind_3)  
+  
+  
+  return <- list(data = df_List,Inertie_Intra = W,Inertie_Inter = B,Inertie_Tot = Tot,Valeur_Propre = reduxUvalues,Inf_Stat = inf_List,Score = score,Gravity_center = G_fac,Distance = df_distance,Confusion_matrix = confusion)
+}
+
+
+#result <- AFD_class(df)  
+
+result_2 <- AFD_class(prematures)
+```
